@@ -10,33 +10,29 @@ import base64
 
 st.set_page_config(page_title="Qwen Graph Tester", layout="wide")
 
-st.title("Тестер графиков от Qwen2.5-14B-Instruct-AWQ")
-st.markdown("Вставь весь сырой JSON-ответ из терминала → приложение вытащит чистый код и попробует отрендерить графики.")
+st.title("Авто-тестер графиков от Qwen2.5-14B-Instruct-AWQ")
+st.markdown("Вставь **весь сырой JSON-ответ** из терминала → приложение вытащит чистый код и попробует отрендерить графики.")
 
 raw_json = st.text_area("Вставь весь JSON-ответ", height=400)
 
-if st.button("Обработать и показать"):
+if st.button("Вытащить код и отрендерить"):
     if raw_json.strip():
         try:
             # Парсим JSON
             data = json.loads(raw_json)
             full_text = data['choices'][0]['message']['content']
 
-            # Умное вытаскивание кода — ищем самый большой блок между ```python и ```
-            code_blocks = re.findall(r'```python\s*(.*?)```', full_text, re.DOTALL | re.IGNORECASE)
-            if code_blocks:
-                # Берём самый длинный блок (обычно основной код)
-                code = max(code_blocks, key=len).strip()
+            # Вытаскиваем код между ```python и ``` (самый надёжный)
+            code_match = re.search(r'```python\s*(.*?)```', full_text, re.DOTALL | re.IGNORECASE)
+            if code_match:
+                code = code_match.group(1).strip()
             else:
-                # Запасной вариант: ищем от import streamlit до конца
+                # Запасной вариант: от import streamlit до конца
                 code_start = full_text.find('import streamlit')
-                if code_start != -1:
-                    code = full_text[code_start:].strip()
-                else:
-                    code = full_text.strip()
+                code = full_text[code_start:].strip() if code_start != -1 else full_text.strip()
 
-            # Убираем мусорные тройные кавычки в конце (инструкции)
-            code = re.sub(r'""".*?$', '', code, flags=re.DOTALL).strip()
+            # Убираем весь мусор в конце: инструкции, """ ... """, # Инструкции и т.д.
+            code = re.split(r'# Инструкции|# Как запустить|### Как запустить|"""|if st.checkbox\("Показать инструкцию"', code)[0].strip()
 
             st.subheader("Вытащенный чистый код")
             st.code(code, language="python")
@@ -65,7 +61,7 @@ if st.button("Обработать и показать"):
             finally:
                 plt.close(fig)
 
-            # Ручной режим
+            # Ручной режим — на всякий случай
             st.subheader("Ручной рендер (если авто не получилось)")
             manual_code = st.text_area("Вставь только код графика (от fig = ... до plt.show() или st.plotly_chart)", height=200)
             if st.button("Ручной рендер"):
@@ -86,7 +82,7 @@ if st.button("Обработать и показать"):
                     st.warning("Вставь код графика.")
 
         except json.JSONDecodeError:
-            st.error("Не удалось распарсить JSON. Убедись, что вставил весь ответ.")
+            st.error("Не удалось распарсить JSON. Убедись, что вставил весь ответ целиком.")
         except Exception as e:
             st.error(f"Общая ошибка: {str(e)}")
     else:
