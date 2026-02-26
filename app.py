@@ -129,6 +129,17 @@ if run and raw_json.strip():
     if not code:
         st.stop()
 
+    # Проверяем — модель могла ответить текстом вместо кода
+    python_keywords = ["import ", "def ", "st.", "pd.", "plt.", "px."]
+    looks_like_code = any(kw in code for kw in python_keywords)
+    if not looks_like_code:
+        st.warning(
+            "Модель ответила текстом, а не кодом. "
+            "Попробуй переформулировать промт: например добавь 'Ответь только Python-кодом внутри ```python ... ```'."
+        )
+        st.text_area("Ответ модели", code, height=200)
+        st.stop()
+
     with st.expander("Извлечённый код", expanded=False):
         st.code(code, language="python")
         try:
@@ -191,11 +202,38 @@ if run and raw_json.strip():
                 date_lines.append(f"{indent}{v1} = pd.Timestamp({v1})")
     patched = "\n".join(date_lines)
 
+    # Патч: заменяем импорты недоступных модулей на заглушки
+    missing_modules = []
+    def _safe_import(name, *a, **kw):
+        try:
+            return _real_import(name, *a, **kw)
+        except ImportError:
+            missing_modules.append(name)
+            import types
+            stub = types.ModuleType(name)
+            stub.__all__ = []
+            return stub
+    _real_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+    exec_ns["__builtins__"] = dict(__builtins__) if isinstance(__builtins__, dict) else vars(__builtins__).copy()
+    exec_ns["__builtins__"]["__import__"] = _safe_import
+
     try:
         exec(textwrap.dedent(patched), exec_ns)
+        if missing_modules:
+            unique = list(dict.fromkeys(missing_modules))
+            st.warning(
+                "Некоторые модули не установлены и заменены заглушками: "
+                + ", ".join(f"`{m}`" for m in unique)
+                + ". Графики, зависящие от них, могут не работать."
+            )
     except Exception as e:
-        st.error(f"Ошибка при выполнении кода: {e}")
-        st.info("Открой 'Извлечённый код' выше и проверь синтаксис.")
+        err = str(e)
+        st.error(f"Ошибка при выполнении кода: {err}")
+        if "No module named" in err:
+            mod = err.split('No module named')[-1].strip().strip(chr(39)).strip(chr(34))
+            st.info(f"Установи модуль командой: `pip install {mod}`")
+        else:
+            st.info("Открой 'Извлечённый код' выше и проверь синтаксис.")
 
 elif run:
     st.warning("Вставь JSON-ответ модели перед запуском.")
