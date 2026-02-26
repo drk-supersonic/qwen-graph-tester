@@ -1,76 +1,166 @@
 import streamlit as st
 import json
 import re
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
+import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 import io
 import base64
+import textwrap
 
 st.set_page_config(page_title="Qwen Graph Tester", layout="wide")
 
-st.title("Тестер графиков от Qwen2.5-14B-Instruct-AWQ")
-st.markdown("Вставь **весь сырой JSON-ответ** из терминала → приложение вытащит код и попробует отрендерить.")
+st.title("🧪 Qwen Graph Tester")
+st.markdown("Вставь **весь сырой JSON-ответ** из терминала — приложение вытащит Python-код и отрендерит графики напрямую.")
 
-raw_json = st.text_area("Вставь весь JSON-ответ", height=400)
+# ── helpers ──────────────────────────────────────────────────────────────────
 
-if st.button("Вытащить код и отрендерить"):
-    if raw_json.strip():
-        try:
-            data = json.loads(raw_json)
-            full_text = data['choices'][0]['message']['content']
+def extract_code(raw_json: str) -> str | None:
+    """
+    Достаём Python-код из JSON-ответа OpenAI-совместимого API.
+    Пробуем несколько стратегий по убыванию надёжности.
+    """
+    try:
+        data = json.loads(raw_json)
+        content = data["choices"][0]["message"]["content"]
+    except Exception as e:
+        st.error(f"Не удалось распарсить JSON: {e}")
+        return None
 
-            # Берём весь content после "content": — это самый надёжный способ
-            code = full_text.strip()
+    # 1. Есть ```python … ``` блок?
+    match = re.search(r"```python\s*(.*?)```", content, re.DOTALL)
+    if match:
+        return match.group(1).strip()
 
-            # Убираем инструкции в конце (всё после # Инструкции, """ или Установите)
-            code = re.split(r'# Инструкции|# Как запустить|"""|if st.checkbox|Установите|Запустите|if __name__', code)[0].strip()
+    # 2. Просто ``` … ``` блок?
+    match = re.search(r"```\s*(.*?)```", content, re.DOTALL)
+    if match:
+        return match.group(1).strip()
 
-            st.subheader("Вытащенный чистый код")
-            st.code(code, language="python")
+    # 3. Весь content — берём как есть
+    return content.strip()
 
-            # Авто-рендер (попробуем выполнить весь код)
-            st.subheader("Автоматический рендер графиков")
-            fig = plt.figure(figsize=(12, 8))
-            try:
-                exec_globals = {"plt": plt, "sns": sns, "pd": pd, "px": px, "st": st}
-                exec(code, exec_globals)
 
-                buf = io.BytesIO()
-                fig.savefig(buf, format="png", bbox_inches="tight")
-                buf.seek(0)
-                img_str = base64.b64encode(buf.read()).decode()
-                st.image(f"data:image/png;base64,{img_str}", caption="Результат графика", use_column_width=True)
+def make_sample_df() -> pd.DataFrame:
+    """Генерируем демо-данные, чтобы код модели мог их использовать."""
+    rng = np.random.default_rng(42)
+    n = 300
+    dates = pd.date_range("2023-01-01", periods=n, freq="D")
+    df = pd.DataFrame({
+        "date": dates,
+        "sales": rng.integers(100, 5000, n).astype(float),
+        "region": rng.choice(["Север", "Юг", "Запад", "Восток"], n),
+        "product": rng.choice([f"Продукт {i}" for i in range(1, 16)], n),
+        "category": rng.choice(["Электроника", "Одежда", "Еда", "Спорт"], n),
+        "customer_type": rng.choice(["Розница", "Оптовик", "VIP"], n),
+        "price": rng.uniform(10, 500, n).round(2),
+        "discount": rng.uniform(0, 0.4, n).round(2),
+        "quantity": rng.integers(1, 50, n),
+    })
+    df["date"] = df["date"].astype(str)   # как в реальном CSV
+    return df
 
-            except Exception as e:
-                st.error(f"Авто-рендер не сработал: {str(e)}\n\nИспользуй ручной режим ниже (вставь фрагмент от fig = ... до st.pyplot или st.plotly_chart).")
-            finally:
-                plt.close(fig)
 
-            # Ручной режим
-            st.subheader("Ручной рендер")
-            manual_code = st.text_area("Вставь только код одного графика", height=200)
-            if st.button("Ручной рендер"):
-                if manual_code.strip():
-                    fig = plt.figure(figsize=(12, 8))
-                    try:
-                        exec(manual_code, {"plt": plt, "sns": sns, "pd": pd, "px": px, "st": st})
-                        buf = io.BytesIO()
-                        fig.savefig(buf, format="png", bbox_inches="tight")
-                        buf.seek(0)
-                        img_str = base64.b64encode(buf.read()).decode()
-                        st.image(f"data:image/png;base64,{img_str}", caption="Ручной график")
-                    except Exception as e:
-                        st.error(f"Ошибка: {str(e)}")
-                    finally:
-                        plt.close(fig)
-                else:
-                    st.warning("Вставь код графика.")
+def try_load_csv(uploaded_file) -> pd.DataFrame | None:
+    if uploaded_file is None:
+        return None
+    try:
+        return pd.read_csv(uploaded_file)
+    except Exception as e:
+        st.warning(f"Не удалось загрузить CSV: {e}")
+        return None
 
-        except json.JSONDecodeError:
-            st.error("Не удалось распарсить JSON.")
-        except Exception as e:
-            st.error(f"Ошибка: {str(e)}")
-    else:
-        st.warning("Вставь JSON.")
+
+# ── sidebar ───────────────────────────────────────────────────────────────────
+
+with st.sidebar:
+    st.header("⚙️ Настройки")
+    use_real_csv = st.checkbox("Загрузить реальный CSV вместо демо-данных", value=False)
+    csv_file = None
+    if use_real_csv:
+        csv_file = st.file_uploader("CSV файл", type=["csv"])
+    st.divider()
+    st.caption("Демо-данные генерируются автоматически, если CSV не загружен.")
+
+# ── main ──────────────────────────────────────────────────────────────────────
+
+raw_json = st.text_area("Вставь весь JSON-ответ модели", height=300, placeholder='{"choices": [{"message": {"content": "```python\\n...```"}}]}')
+
+col_run, col_clear = st.columns([1, 5])
+run = col_run.button("▶ Запустить", type="primary")
+if col_clear.button("🗑 Очистить"):
+    st.rerun()
+
+if run and raw_json.strip():
+    code = extract_code(raw_json)
+    if not code:
+        st.stop()
+
+    with st.expander("📄 Извлечённый код", expanded=False):
+        st.code(code, language="python")
+
+    st.divider()
+    st.subheader("📊 Результат рендера")
+
+    # Подготовим DataFrame — реальный или демо
+    real_df = try_load_csv(csv_file) if use_real_csv else None
+    sample_df = real_df if real_df is not None else make_sample_df()
+
+    # Пространство имён для exec
+    exec_ns = {
+        # stdlib / io
+        "io": io,
+        "base64": base64,
+        "re": re,
+        # data
+        "pd": pd,
+        "np": np,
+        # viz
+        "plt": plt,
+        "sns": sns,
+        "px": px,
+        "go": go,
+        "matplotlib": matplotlib,
+        # streamlit
+        "st": st,
+        # удобные данные прямо в пространстве имён
+        "df": sample_df,
+        "uploaded_df": sample_df,
+    }
+
+    # Патчим st.file_uploader чтобы он не ломал выполнение
+    # (модель часто вызывает его внутри кода — перехватываем)
+    class _FakeUploader:
+        def __call__(self, *a, **kw):
+            # возвращаем буфер с демо-CSV
+            buf = io.BytesIO()
+            sample_df.to_csv(buf, index=False)
+            buf.seek(0)
+            buf.name = "sample.csv"
+            return buf
+    exec_ns["_fake_uploader"] = _FakeUploader()
+
+    # Заменяем st.file_uploader в коде на наш фейк
+    patched_code = re.sub(
+        r"\bst\.file_uploader\s*\(",
+        "_fake_uploader(",
+        code,
+    )
+
+    # Убираем st.set_page_config — на Streamlit Cloud вызов второй раз падает
+    patched_code = re.sub(r"st\.set_page_config\([^)]*\)\s*\n?", "", patched_code)
+
+    try:
+        exec(textwrap.dedent(patched_code), exec_ns)
+    except Exception as e:
+        st.error(f"❌ Ошибка при выполнении кода: {e}")
+        st.info("💡 Совет: проверь, что модель сгенерировала корректный Python. "
+                "Открой «Извлечённый код» выше и посмотри на синтаксис.")
+
+elif run:
+    st.warning("Вставь JSON-ответ модели перед запуском.")
