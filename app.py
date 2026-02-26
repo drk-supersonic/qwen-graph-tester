@@ -193,42 +193,58 @@ if run and raw_json.strip():
 
     import traceback as _tb
 
-    # Разбиваем код на секции: виджеты (sidebar/filters) и графики
-    # При KeyError перезапускаем только секцию графиков с пофикшенными данными
-    def run_patched(code_str, ns):
-        exec(textwrap.dedent(code_str), ns)
-
-    def run_patched_skip_widgets(code_str, ns):
-        # Заменяем виджеты-дубли на заглушки при повторном запуске
-        widget_re = re.compile(
-            r'\bst\.(multiselect|selectbox|radio|checkbox|slider|date_input|text_input|number_input)\s*\('
-        )
-        safe_lines = []
-        for ln in code_str.splitlines():
-            if widget_re.search(ln):
-                # Превращаем присвоение виджета в no-op через уже существующее значение
-                m = re.match(r'(\s*)(\w+)\s*=\s*st\.', ln)
-                if m:
-                    indent, var = m.group(1), m.group(2)
-                    # Если переменная уже есть в ns — пропускаем
-                    if var in ns:
-                        safe_lines.append(f'{indent}pass  # skipped widget {var}')
-                        continue
-            safe_lines.append(ln)
-        exec(textwrap.dedent('\n'.join(safe_lines)), ns)
+    def _make_silent_st(real_st, ns):
+        # Создаём объект-заглушку для повторного запуска:
+        # виджеты возвращают уже вычисленные значения из ns,
+        # графики и текст работают нормально
+        import types
+        silent = types.SimpleNamespace()
+        _widget_names = ['multiselect','selectbox','radio','checkbox',
+                         'slider','date_input','text_input','number_input',
+                         'text_area','file_uploader']
+        # Все не-виджет атрибуты копируем как есть
+        for attr in dir(real_st):
+            if not attr.startswith('_'):
+                try:
+                    setattr(silent, attr, getattr(real_st, attr))
+                except Exception:
+                    pass
+        # Виджеты — возвращают значение из ns если есть, иначе None
+        def _make_widget_stub(wname):
+            def stub(label='', *a, **kw):
+                # Ищем в ns переменную по label или просто первую подходящую
+                for k, v in ns.items():
+                    if isinstance(label, str) and label and k == label:
+                        return v
+                return kw.get('default', kw.get('value', None))
+            return stub
+        for wn in _widget_names:
+            setattr(silent, wn, _make_widget_stub(wn))
+        # sidebar тоже делаем silent
+        import contextlib
+        @contextlib.contextmanager
+        def _silent_ctx(*a, **kw):
+            yield silent
+        silent.sidebar = silent
+        silent.columns = lambda n, **kw: [silent] * (n if isinstance(n, int) else len(n))
+        silent.tabs = lambda labels: [silent] * len(labels)
+        silent.expander = _silent_ctx
+        silent.__enter__ = lambda self: self
+        silent.__exit__ = lambda self, *a: False
+        return silent
 
     try:
-        run_patched(patched, exec_ns)
+        exec(textwrap.dedent(patched), exec_ns)
     except KeyError as e:
         missing_col = str(e).strip(chr(39)).strip(chr(34))
         st.error(f'Ошибка при выполнении кода: KeyError {e}')
         base_df = exec_ns.get('filtered_df', exec_ns.get('df', sample_df))
         if missing_col in base_df.columns:
-            st.warning(f'Колонка `{missing_col}` найдена. Добавляю в промежуточные DataFrame и перезапускаю графики...')
+            st.warning(f'Колонка `{missing_col}` найдена. Добавляю в промежуточные DataFrame и перезапускаю...')
             for k in list(exec_ns.keys()):
                 v = exec_ns[k]
                 if isinstance(v, pd.DataFrame) and missing_col not in v.columns:
-                    for join_col in ['project_name', 'date', 'region']:
+                    for join_col in ['project_name', 'date', 'region', 'product']:
                         if join_col in v.columns and join_col in base_df.columns:
                             try:
                                 lookup = base_df[[join_col, missing_col]].drop_duplicates(join_col)
@@ -236,16 +252,20 @@ if run and raw_json.strip():
                                 break
                             except Exception:
                                 pass
+            # Повторный запуск с заглушкой для виджетов
+            exec_ns['st'] = _make_silent_st(st, exec_ns)
             try:
-                run_patched_skip_widgets(patched, exec_ns)
+                exec(textwrap.dedent(patched), exec_ns)
                 st.success('Автоисправление сработало!')
             except Exception as e2:
                 st.error(f'Автоисправление не помогло: {e2}')
+            finally:
+                exec_ns['st'] = st  # восстанавливаем реальный st
         found_dfs = {k: v for k, v in exec_ns.items() if isinstance(v, pd.DataFrame) and not k.startswith('_')}
         if found_dfs:
             st.warning('Колонки доступных DataFrame:')
-            for name, frame in found_dfs.items():
-                st.code(f'{name}: {list(frame.columns)}', language='python')
+            for nm, fr in found_dfs.items():
+                st.code(f'{nm}: {list(fr.columns)}', language='python')
     except Exception as e:
         err_type = type(e).__name__
         st.error(f'Ошибка при выполнении кода: {err_type}: {e}')
