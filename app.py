@@ -192,25 +192,52 @@ if run and raw_json.strip():
     patched = "\n".join(date_lines)
 
     import traceback as _tb
+
+    # Разбиваем код на секции: виджеты (sidebar/filters) и графики
+    # При KeyError перезапускаем только секцию графиков с пофикшенными данными
+    def run_patched(code_str, ns):
+        exec(textwrap.dedent(code_str), ns)
+
+    def run_patched_skip_widgets(code_str, ns):
+        # Заменяем виджеты-дубли на заглушки при повторном запуске
+        widget_re = re.compile(
+            r'\bst\.(multiselect|selectbox|radio|checkbox|slider|date_input|text_input|number_input)\s*\('
+        )
+        safe_lines = []
+        for ln in code_str.splitlines():
+            if widget_re.search(ln):
+                # Превращаем присвоение виджета в no-op через уже существующее значение
+                m = re.match(r'(\s*)(\w+)\s*=\s*st\.', ln)
+                if m:
+                    indent, var = m.group(1), m.group(2)
+                    # Если переменная уже есть в ns — пропускаем
+                    if var in ns:
+                        safe_lines.append(f'{indent}pass  # skipped widget {var}')
+                        continue
+            safe_lines.append(ln)
+        exec(textwrap.dedent('\n'.join(safe_lines)), ns)
+
     try:
-        exec(textwrap.dedent(patched), exec_ns)
+        run_patched(patched, exec_ns)
     except KeyError as e:
         missing_col = str(e).strip(chr(39)).strip(chr(34))
         st.error(f'Ошибка при выполнении кода: KeyError {e}')
         base_df = exec_ns.get('filtered_df', exec_ns.get('df', sample_df))
         if missing_col in base_df.columns:
-            st.warning(f'Колонка `{missing_col}` есть в основном df. Добавляю в промежуточные и перезапускаю...')
+            st.warning(f'Колонка `{missing_col}` найдена. Добавляю в промежуточные DataFrame и перезапускаю графики...')
             for k in list(exec_ns.keys()):
                 v = exec_ns[k]
                 if isinstance(v, pd.DataFrame) and missing_col not in v.columns:
-                    if 'project_name' in v.columns and 'project_name' in base_df.columns:
-                        try:
-                            lookup = base_df[['project_name', missing_col]].drop_duplicates('project_name')
-                            exec_ns[k] = v.merge(lookup, on='project_name', how='left')
-                        except Exception:
-                            pass
+                    for join_col in ['project_name', 'date', 'region']:
+                        if join_col in v.columns and join_col in base_df.columns:
+                            try:
+                                lookup = base_df[[join_col, missing_col]].drop_duplicates(join_col)
+                                exec_ns[k] = v.merge(lookup, on=join_col, how='left')
+                                break
+                            except Exception:
+                                pass
             try:
-                exec(textwrap.dedent(patched), exec_ns)
+                run_patched_skip_widgets(patched, exec_ns)
                 st.success('Автоисправление сработало!')
             except Exception as e2:
                 st.error(f'Автоисправление не помогло: {e2}')
