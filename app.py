@@ -55,16 +55,17 @@ def sanitize_code(code: str) -> str:
     """
     # 1. Убираем trailing строки с незакрытыми тройными кавычками
     #    Стратегия: если число """ нечётное — добавляем закрывающую
-    triple_dq = code.count('"""')
-    triple_sq = code.count("'''")
+    tq_double = '"""'
+    tq_single = "'" * 3
+    triple_dq = code.count(tq_double)
+    triple_sq = code.count(tq_single)
 
     if triple_dq % 2 != 0:
-        # Находим последнее вхождение """ и обрезаем код до него
-        last_idx = code.rfind('"""')
+        last_idx = code.rfind(tq_double)
         code = code[:last_idx].rstrip()
 
     if triple_sq % 2 != 0:
-        last_idx = code.rfind("'''")
+        last_idx = code.rfind(tq_single)
         code = code[:last_idx].rstrip()
 
     # 2. Убираем строки-хвосты, которые содержат только частичный строковый литерал
