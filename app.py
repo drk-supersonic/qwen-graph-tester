@@ -10,7 +10,7 @@ import base64
 
 st.set_page_config(page_title="Qwen Graph Tester", layout="wide")
 
-st.title("Тестер графиков от Qwen2.5-14B-Instruct-AWQ 111")
+st.title("Тестер графиков от Qwen2.5-14B-Instruct-AWQ")
 st.markdown("Вставь весь JSON-ответ → приложение вытащит код и отрендерит все графики.")
 
 raw_json = st.text_area("Вставь весь JSON-ответ", height=400)
@@ -38,8 +38,9 @@ if st.button("Обработать и показать"):
             # Авто-рендер всех графиков
             st.subheader("Автоматический рендер всех графиков")
             graph_found = False
-            fig_patterns = [
-                r'(fig\d*,\s*ax\d*\s*=|fig\s*=|plt\.figure).*?(st\.pyplot|plt\.show|st\.plotly_chart|fig\.show)',
+            # Ищем каждый отдельный блок с fig/st.pyplot/st.plotly_chart
+            graph_patterns = [
+                r'(fig\d*,\s*ax\d*\s*=|fig\s*=).*?(st\.pyplot|plt\.show|st\.plotly_chart|fig\.show)',
                 r'sns\..*?(st\.pyplot|plt\.show)',
                 r'px\..*?st\.plotly_chart'
             ]
@@ -63,11 +64,11 @@ if st.button("Обработать и показать"):
                         plt.close(fig)
 
             if not graph_found:
-                st.warning("Не нашёл графики. Используй ручной режим ниже (вставь фрагмент от fig = ... до st.pyplot или st.plotly_chart).")
+                st.warning("Не нашёл графики в коде. Используй ручной режим ниже (вставь фрагмент от fig = ... до st.pyplot или st.plotly_chart).")
 
             # Ручной режим
             st.subheader("Ручной рендер")
-            manual_code = st.text_area("Вставь только код одного графика", height=200)
+            manual_code = st.text_area("Вставь только код одного графика (от fig = ... до plt.show() или st.plotly_chart)", height=200)
             if st.button("Ручной рендер"):
                 if manual_code.strip():
                     fig = plt.figure(figsize=(12, 8))
