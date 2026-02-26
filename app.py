@@ -4,65 +4,72 @@ import re
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import io
 import base64
 
 st.set_page_config(page_title="Qwen Graph Tester", layout="wide")
 
-st.title("Тестер графиков от Qwen2.5-14B-Instruct-AWQ")
-st.markdown("Вставь **весь сырой JSON-ответ** из терминала (от {'id':... до конца) → приложение само вытащит код и попробует отрендерить график.")
+st.title("Авто-тестер графиков от Qwen2.5-14B-Instruct-AWQ")
+st.markdown("Вставь **весь сырой JSON-ответ** из терминала → приложение вытащит код, покажет его и попробует отрендерить графики.")
 
-raw_json = st.text_area("Вставь весь JSON-ответ сюда", height=400)
+raw_json = st.text_area("Вставь весь JSON-ответ от curl", height=400)
 
-if st.button("Вытащить код и отрендерить"):
+if st.button("Обработать и показать"):
     if raw_json.strip():
         try:
             # Парсим JSON
             data = json.loads(raw_json)
-            # Берём content из первого choice
             full_text = data['choices'][0]['message']['content']
 
-            # Вытаскиваем код между ```python и ``` (самый надёжный способ)
+            # Вытаскиваем код между ```python и ```
             code_match = re.search(r'```python\s*(.*?)```', full_text, re.DOTALL | re.IGNORECASE)
             if code_match:
                 code = code_match.group(1).strip()
             else:
-                # Если нет ```python — ищем начало с import streamlit или plt
+                # Запасной вариант: ищем начало с import
                 code_start = full_text.find('import streamlit')
-                if code_start == -1:
-                    code_start = full_text.find('plt.figure')
                 code = full_text[code_start:].strip() if code_start != -1 else full_text.strip()
 
             st.subheader("Вытащенный чистый код")
             st.code(code, language="python")
 
             # Пытаемся отрендерить
-            st.subheader("Автоматический рендер графика")
+            st.subheader("Автоматический рендер графиков")
             fig = plt.figure(figsize=(12, 8))
             try:
-                local_vars = {"plt": plt, "sns": sns, "pd": pd, "px": st.plotly, "st": st}
-                exec(code, {}, local_vars)
+                # Глобальные переменные для exec
+                exec_globals = {
+                    "plt": plt,
+                    "sns": sns,
+                    "pd": pd,
+                    "px": px,
+                    "go": go,
+                    "st": st
+                }
+                exec(code, exec_globals)
 
-                # Если график был нарисован — сохраняем и показываем
+                # Если график matplotlib/seaborn — сохраняем как PNG
                 buf = io.BytesIO()
                 fig.savefig(buf, format="png", bbox_inches="tight")
                 buf.seek(0)
                 img_str = base64.b64encode(buf.read()).decode()
-                st.image(f"data:image/png;base64,{img_str}", caption="Результат графика", use_column_width=True)
+                st.image(f"data:image/png;base64,{img_str}", caption="Результат (matplotlib/seaborn)", use_column_width=True)
 
             except Exception as e:
-                st.error(f"Не удалось автоматически отрендерить график:\n{str(e)}\n\nПопробуй ниже вставить только фрагмент с plt.figure() ... plt.show().")
+                st.error(f"Авто-рендер не сработал: {str(e)}\n\nПопробуй ниже вставить только фрагмент с plt.figure() ... plt.show() или st.plotly_chart().")
             finally:
                 plt.close(fig)
 
-            # Дополнительное поле для ручного рендера (если авто не сработало)
+            # Ручной рендер для Plotly или сложных случаев
             st.subheader("Ручной рендер (если авто не получилось)")
-            manual_render = st.text_area("Вставь только код графика (от plt.figure до plt.show)", height=200)
+            manual_code = st.text_area("Вставь только код графика (от fig = ... до st.plotly_chart или plt.show)", height=200)
             if st.button("Ручной рендер"):
-                if manual_render.strip():
-                    fig_manual = plt.figure(figsize=(10, 6))
+                if manual_code.strip():
                     try:
-                        exec(manual_render, {"plt": plt, "sns": sns, "pd": pd})
+                        fig_manual = plt.figure(figsize=(10, 6))
+                        exec(manual_code, {"plt": plt, "sns": sns, "pd": pd, "px": px, "go": go, "st": st})
                         buf = io.BytesIO()
                         fig_manual.savefig(buf, format="png", bbox_inches="tight")
                         buf.seek(0)
@@ -72,10 +79,12 @@ if st.button("Вытащить код и отрендерить"):
                         st.error(f"Ошибка ручного рендера: {str(e)}")
                     finally:
                         plt.close(fig_manual)
+                else:
+                    st.warning("Вставь код графика.")
 
         except json.JSONDecodeError:
             st.error("Не удалось распарсить JSON. Убедись, что вставил весь ответ целиком.")
         except Exception as e:
             st.error(f"Общая ошибка: {str(e)}")
     else:
-        st.warning("Вставь JSON-ответ сначала.")
+        st.warning("Вставь JSON сначала.")
