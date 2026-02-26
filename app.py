@@ -11,32 +11,26 @@ import base64
 st.set_page_config(page_title="Qwen Graph Tester", layout="wide")
 
 st.title("Тестер графиков от Qwen2.5-14B-Instruct-AWQ")
-st.markdown("Вставь **весь сырой JSON-ответ** из терминала → приложение вытащит код и отрендерит графики.")
+st.markdown("Вставь **весь сырой JSON-ответ** из терминала → приложение вытащит код и попробует отрендерить.")
 
 raw_json = st.text_area("Вставь весь JSON-ответ", height=400)
 
 if st.button("Вытащить код и отрендерить"):
     if raw_json.strip():
         try:
-            # Парсим JSON
             data = json.loads(raw_json)
             full_text = data['choices'][0]['message']['content']
 
-            # Улучшенное вытаскивание: ищем от первого import streamlit до конца
-            code_start = full_text.find('import streamlit')
-            if code_start != -1:
-                code = full_text[code_start:].strip()
-            else:
-                # Если нет import streamlit — берём весь content
-                code = full_text.strip()
+            # Берём весь content после "content": — это самый надёжный способ
+            code = full_text.strip()
 
-            # Убираем мусор в конце (инструкции, """ и т.д.)
+            # Убираем инструкции в конце (всё после # Инструкции, """ или Установите)
             code = re.split(r'# Инструкции|# Как запустить|"""|if st.checkbox|Установите|Запустите|if __name__', code)[0].strip()
 
             st.subheader("Вытащенный чистый код")
             st.code(code, language="python")
 
-            # Авто-рендер
+            # Авто-рендер (попробуем выполнить весь код)
             st.subheader("Автоматический рендер графиков")
             fig = plt.figure(figsize=(12, 8))
             try:
@@ -50,13 +44,13 @@ if st.button("Вытащить код и отрендерить"):
                 st.image(f"data:image/png;base64,{img_str}", caption="Результат графика", use_column_width=True)
 
             except Exception as e:
-                st.error(f"Авто-рендер не сработал: {str(e)}\n\nПопробуй ручной режим ниже.")
+                st.error(f"Авто-рендер не сработал: {str(e)}\n\nИспользуй ручной режим ниже (вставь фрагмент от fig = ... до st.pyplot или st.plotly_chart).")
             finally:
                 plt.close(fig)
 
             # Ручной режим
             st.subheader("Ручной рендер")
-            manual_code = st.text_area("Вставь только код графика (от fig = ... до plt.show() или st.plotly_chart)", height=200)
+            manual_code = st.text_area("Вставь только код одного графика", height=200)
             if st.button("Ручной рендер"):
                 if manual_code.strip():
                     fig = plt.figure(figsize=(12, 8))
