@@ -195,26 +195,37 @@ if run and raw_json.strip():
     try:
         exec(textwrap.dedent(patched), exec_ns)
     except KeyError as e:
-        st.error(f"Ошибка при выполнении кода: KeyError {e}")
-        # Показываем реальные колонки всех DataFrame в пространстве имён
-        found_dfs = {k: v for k, v in exec_ns.items()
-                     if isinstance(v, pd.DataFrame) and not k.startswith("_")}
+        missing_col = str(e).strip(chr(39)).strip(chr(34))
+        st.error(f'Ошибка при выполнении кода: KeyError {e}')
+        base_df = exec_ns.get('filtered_df', exec_ns.get('df', sample_df))
+        if missing_col in base_df.columns:
+            st.warning(f'Колонка `{missing_col}` есть в основном df. Добавляю в промежуточные и перезапускаю...')
+            for k in list(exec_ns.keys()):
+                v = exec_ns[k]
+                if isinstance(v, pd.DataFrame) and missing_col not in v.columns:
+                    if 'project_name' in v.columns and 'project_name' in base_df.columns:
+                        try:
+                            lookup = base_df[['project_name', missing_col]].drop_duplicates('project_name')
+                            exec_ns[k] = v.merge(lookup, on='project_name', how='left')
+                        except Exception:
+                            pass
+            try:
+                exec(textwrap.dedent(patched), exec_ns)
+                st.success('Автоисправление сработало!')
+            except Exception as e2:
+                st.error(f'Автоисправление не помогло: {e2}')
+        found_dfs = {k: v for k, v in exec_ns.items() if isinstance(v, pd.DataFrame) and not k.startswith('_')}
         if found_dfs:
-            st.warning("Колонки доступных DataFrame:")
+            st.warning('Колонки доступных DataFrame:')
             for name, frame in found_dfs.items():
-                st.code(f"{name}: {list(frame.columns)}", language="python")
-        st.info("Модель обратилась к несуществующей колонке. "
-                "Скорее всего она назвала её иначе при генерации данных. "
-                "Открой 'Извлечённый код' и найди где создаётся DataFrame.")
+                st.code(f'{name}: {list(frame.columns)}', language='python')
     except Exception as e:
         err_type = type(e).__name__
-        st.error(f"Ошибка при выполнении кода: {err_type}: {e}")
-        tb_lines = _tb.format_exc().splitlines()
-        # Показываем только строки относящиеся к коду модели (file "<string>")
-        model_lines = [l for l in tb_lines if '<string>' in l or 'line' in l.lower()]
+        st.error(f'Ошибка при выполнении кода: {err_type}: {e}')
+        tb_str = _tb.format_exc()
+        model_lines = [l for l in tb_str.splitlines() if '<string>' in l]
         if model_lines:
-            st.code("\n".join(model_lines[-6:]), language="text")
-        st.info("Открой 'Извлечённый код' выше и проверь синтаксис.")
-
+            st.code('\n'.join(model_lines), language='text')
+        st.info('Открой Извлечённый код выше и проверь синтаксис.')
 elif run:
     st.warning("Вставь JSON-ответ модели перед запуском.")
