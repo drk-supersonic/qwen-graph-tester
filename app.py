@@ -35,15 +35,55 @@ def extract_code(raw_json: str) -> str | None:
     # 1. Есть ```python … ``` блок?
     match = re.search(r"```python\s*(.*?)```", content, re.DOTALL)
     if match:
-        return match.group(1).strip()
+        return sanitize_code(match.group(1).strip())
 
     # 2. Просто ``` … ``` блок?
     match = re.search(r"```\s*(.*?)```", content, re.DOTALL)
     if match:
-        return match.group(1).strip()
+        return sanitize_code(match.group(1).strip())
 
     # 3. Весь content — берём как есть
-    return content.strip()
+    return sanitize_code(content.strip())
+
+
+def sanitize_code(code: str) -> str:
+    """
+    Чиним типичные артефакты кода от LLM перед exec():
+    - незакрытые тройные кавычки ("""  или ''')
+    - незакрытые обычные строки в конце файла
+    - оборванные инструкции в конце
+    """
+    # 1. Убираем trailing строки с незакрытыми тройными кавычками
+    #    Стратегия: если число """ нечётное — добавляем закрывающую
+    triple_dq = code.count('"""')
+    triple_sq = code.count("'''")
+
+    if triple_dq % 2 != 0:
+        # Находим последнее вхождение """ и обрезаем код до него
+        last_idx = code.rfind('"""')
+        code = code[:last_idx].rstrip()
+
+    if triple_sq % 2 != 0:
+        last_idx = code.rfind("'''")
+        code = code[:last_idx].rstrip()
+
+    # 2. Убираем строки-хвосты, которые содержат только частичный строковый литерал
+    #    (например: `    st.text("""` без закрывающей кавычки)
+    lines = code.splitlines()
+    # Идём с конца — убираем строки пока компиляция не пройдёт
+    for i in range(len(lines), 0, -1):
+        candidate = "\n".join(lines[:i])
+        try:
+            compile(candidate, "<string>", "exec")
+            code = candidate
+            break
+        except SyntaxError:
+            continue
+    else:
+        # Ничего не помогло — вернём как есть
+        pass
+
+    return code
 
 
 def make_sample_df() -> pd.DataFrame:
@@ -103,6 +143,12 @@ if run and raw_json.strip():
 
     with st.expander("📄 Извлечённый код", expanded=False):
         st.code(code, language="python")
+        # Проверяем компилируется ли итоговый код
+        try:
+            compile(code, "<string>", "exec")
+            st.success("✅ Синтаксис Python валиден")
+        except SyntaxError as se:
+            st.warning(f"⚠️ После санитизации остались синтаксические проблемы: {se}")
 
     st.divider()
     st.subheader("📊 Результат рендера")
