@@ -1,76 +1,62 @@
 import streamlit as st
+import json
+import re
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
-import plotly.express as px
 import io
 import base64
 
-st.set_page_config(page_title="Qwen Graph Tester", layout="wide")
+st.set_page_config(page_title="Qwen Graph Tester — простой режим", layout="wide")
 
-# Сайдбар навигация
-page = st.sidebar.selectbox("Страница", ["1. Ввод кода от Qwen", "2. Просмотр кода", "3. Рендер графика"])
+st.title("Простой тестер графиков от Qwen2.5-14B-Instruct-AWQ")
+st.markdown("Вставь **весь сырой ответ из терминала** (JSON с curl) → приложение само вытащит код и попробует отрендерить графики.")
 
-if page == "1. Ввод кода от Qwen":
-    st.title("Вставь ответ от Qwen2.5-14B-Instruct-AWQ")
-    st.markdown("Скопируй **весь код**, который выдала модель (включая ```python ... ```), и вставь ниже.")
+raw_response = st.text_area("Вставь весь JSON-ответ сюда", height=300)
 
-    code_input = st.text_area("Вставь полный код сюда", height=500, key="input_code")
+if st.button("Обработать и показать"):
+    if raw_response.strip():
+        try:
+            # Парсим JSON
+            data = json.loads(raw_response)
+            # Достаём content из choices[0].message.content
+            full_text = data['choices'][0]['message']['content']
 
-    if st.button("Сохранить код"):
-        if code_input.strip():
-            with open("last_code.py", "w", encoding="utf-8") as f:
-                f.write(code_input)
-            st.success("Код сохранён! Перейди на страницу 2 для просмотра.")
-        else:
-            st.warning("Вставь код сначала.")
+            # Вытаскиваем код между ```python и ``` (самый надёжный способ)
+            code_match = re.search(r'```python\s*(.*?)```', full_text, re.DOTALL)
+            if code_match:
+                code = code_match.group(1).strip()
+            else:
+                # Если нет ```python, берём весь текст после первого описания
+                code_start = full_text.find('```python')
+                if code_start == -1:
+                    code_start = full_text.find('import streamlit')
+                code = full_text[code_start:].strip() if code_start != -1 else full_text.strip()
 
-elif page == "2. Просмотр кода":
-    st.title("Просмотр сохранённого кода от Qwen")
+            st.subheader("Вытащенный код")
+            st.code(code, language="python")
 
-    try:
-        with open("last_code.py", "r", encoding="utf-8") as f:
-            code = f.read()
-        st.code(code, language="python")
-    except FileNotFoundError:
-        st.info("Пока нет сохранённого кода. Вернись на страницу 1 и вставь ответ модели.")
-
-elif page == "3. Рендер графика":
-    st.title("Рендер графика из кода")
-    st.markdown("""
-    Вставь **только часть кода**, которая строит график (от plt.figure() до plt.show() или fig.show()).
-    Поддерживаются matplotlib, seaborn, plotly.express.
-    """)
-
-    render_code = st.text_area("Вставь код графика сюда", height=400, key="render_code")
-
-    if st.button("Отрендерить график"):
-        if render_code.strip():
-            fig = None
+            # Пробуем отрендерить графики
+            st.subheader("Рендер графиков")
+            fig = plt.figure(figsize=(10, 6))
             try:
-                # Для matplotlib/seaborn
-                if 'plt.' in render_code or 'sns.' in render_code:
-                    fig = plt.figure(figsize=(10, 6))
-                    exec(render_code, {"plt": plt, "sns": sns, "pd": pd, "px": px})
-                    buf = io.BytesIO()
-                    fig.savefig(buf, format="png", bbox_inches="tight")
-                    buf.seek(0)
-                    img_str = base64.b64encode(buf.read()).decode()
-                    st.image(f"data:image/png;base64,{img_str}", caption="Результат matplotlib/seaborn", use_column_width=True)
+                local_vars = {"plt": plt, "sns": sns, "pd": pd, "st": st}
+                exec(code, {}, local_vars)
 
-                # Для plotly
-                elif 'px.' in render_code:
-                    exec(render_code, {"px": px, "pd": pd})
-                    st.plotly_chart(fig, use_container_width=True)
-
-                else:
-                    st.warning("Код не содержит plt., sns. или px. — попробуй вставить правильный фрагмент.")
-
+                # Если в коде был plt.show() — график уже нарисован
+                buf = io.BytesIO()
+                fig.savefig(buf, format="png", bbox_inches="tight")
+                buf.seek(0)
+                img_str = base64.b64encode(buf.read()).decode()
+                st.image(f"data:image/png;base64,{img_str}", caption="Автоматический рендер графика")
             except Exception as e:
-                st.error(f"Ошибка при выполнении: {str(e)}")
-
+                st.error(f"Не удалось отрендерить график: {str(e)}\n\nПопробуй вставить только фрагмент с plt.figure() ... plt.show().")
             finally:
-                if fig is not None:
-                    plt.close(fig)
-        else:
-            st.warning("Вставь код графика сначала.")
+                plt.close(fig)
+
+        except json.JSONDecodeError:
+            st.error("Не удалось распарсить JSON. Убедись, что вставил весь ответ из терминала.")
+        except Exception as e:
+            st.error(f"Общая ошибка: {str(e)}")
+    else:
+        st.warning("Вставь ответ сначала.")
