@@ -193,44 +193,57 @@ if run and raw_json.strip():
 
     import traceback as _tb
 
-    def _make_silent_st(real_st, ns):
-        # Создаём объект-заглушку для повторного запуска:
-        # виджеты возвращают уже вычисленные значения из ns,
-        # графики и текст работают нормально
-        import types
+    def add_unique_keys(code_str):
+        # Добавляем уникальный key= ко всем виджетам без key
+        # чтобы при повторном exec() не было конфликта ID
+        widget_names = ['multiselect','selectbox','radio','checkbox',
+                        'slider','date_input','text_input','number_input','text_area']
+        out = []
+        counter = [0]
+        for ln in code_str.splitlines():
+            for wn in widget_names:
+                pat = f'st.{wn}('
+                if pat in ln and 'key=' not in ln:
+                    counter[0] += 1
+                    # Добавляем key перед закрывающей скобкой строки
+                    # Если строка заканчивается на ) — вставляем key= перед ней
+                    stripped = ln.rstrip()
+                    if stripped.endswith(')'):
+                        ln = stripped[:-1] + f', key="_w{counter[0]}")' + '\n'
+                    break
+            out.append(ln)
+        return '\n'.join(out)
+
+    patched = add_unique_keys(patched)
+
+    def _make_silent_st(real_st):
+        import types, contextlib
         silent = types.SimpleNamespace()
-        _widget_names = ['multiselect','selectbox','radio','checkbox',
-                         'slider','date_input','text_input','number_input',
-                         'text_area','file_uploader']
-        # Все не-виджет атрибуты копируем как есть
         for attr in dir(real_st):
             if not attr.startswith('_'):
                 try:
                     setattr(silent, attr, getattr(real_st, attr))
                 except Exception:
                     pass
-        # Виджеты — возвращают значение из ns если есть, иначе None
-        def _make_widget_stub(wname):
-            def stub(label='', *a, **kw):
-                # Ищем в ns переменную по label или просто первую подходящую
-                for k, v in ns.items():
-                    if isinstance(label, str) and label and k == label:
-                        return v
-                return kw.get('default', kw.get('value', None))
-            return stub
+        _widget_names = ['multiselect','selectbox','radio','checkbox',
+                         'slider','date_input','text_input','number_input',
+                         'text_area','file_uploader','title','header','subheader',
+                         'markdown','caption','divider','metric']
+        def _noop(*a, **kw):
+            val = kw.get('default', kw.get('value', None))
+            if len(a) > 1: return a[1]  # second arg often is default
+            return val
         for wn in _widget_names:
-            setattr(silent, wn, _make_widget_stub(wn))
-        # sidebar тоже делаем silent
-        import contextlib
+            setattr(silent, wn, _noop)
         @contextlib.contextmanager
         def _silent_ctx(*a, **kw):
             yield silent
         silent.sidebar = silent
-        silent.columns = lambda n, **kw: [silent] * (n if isinstance(n, int) else len(n))
-        silent.tabs = lambda labels: [silent] * len(labels)
+        silent.columns = lambda n, **kw: [silent]*(n if isinstance(n,int) else len(n))
+        silent.tabs = lambda labels: [silent]*len(labels)
         silent.expander = _silent_ctx
         silent.__enter__ = lambda self: self
-        silent.__exit__ = lambda self, *a: False
+        silent.__exit__ = lambda self,*a: False
         return silent
 
     try:
@@ -244,28 +257,33 @@ if run and raw_json.strip():
             for k in list(exec_ns.keys()):
                 v = exec_ns[k]
                 if isinstance(v, pd.DataFrame) and missing_col not in v.columns:
-                    for join_col in ['project_name', 'date', 'region', 'product']:
+                    for join_col in ['project_name','date','region','product']:
                         if join_col in v.columns and join_col in base_df.columns:
                             try:
-                                lookup = base_df[[join_col, missing_col]].drop_duplicates(join_col)
+                                lookup = base_df[[join_col,missing_col]].drop_duplicates(join_col)
                                 exec_ns[k] = v.merge(lookup, on=join_col, how='left')
                                 break
                             except Exception:
                                 pass
-            # Повторный запуск с заглушкой для виджетов
-            exec_ns['st'] = _make_silent_st(st, exec_ns)
+            exec_ns['st'] = _make_silent_st(st)
             try:
                 exec(textwrap.dedent(patched), exec_ns)
                 st.success('Автоисправление сработало!')
             except Exception as e2:
                 st.error(f'Автоисправление не помогло: {e2}')
+                found_dfs = {k:v for k,v in exec_ns.items() if isinstance(v,pd.DataFrame) and not k.startswith('_')}
+                if found_dfs:
+                    st.warning('Колонки доступных DataFrame:')
+                    for nm,fr in found_dfs.items():
+                        st.code(f'{nm}: {list(fr.columns)}', language='python')
             finally:
-                exec_ns['st'] = st  # восстанавливаем реальный st
-        found_dfs = {k: v for k, v in exec_ns.items() if isinstance(v, pd.DataFrame) and not k.startswith('_')}
-        if found_dfs:
-            st.warning('Колонки доступных DataFrame:')
-            for nm, fr in found_dfs.items():
-                st.code(f'{nm}: {list(fr.columns)}', language='python')
+                exec_ns['st'] = st
+        else:
+            found_dfs = {k:v for k,v in exec_ns.items() if isinstance(v,pd.DataFrame) and not k.startswith('_')}
+            if found_dfs:
+                st.warning('Колонки доступных DataFrame:')
+                for nm,fr in found_dfs.items():
+                    st.code(f'{nm}: {list(fr.columns)}', language='python')
     except Exception as e:
         err_type = type(e).__name__
         st.error(f'Ошибка при выполнении кода: {err_type}: {e}')
