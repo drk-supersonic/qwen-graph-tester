@@ -174,6 +174,23 @@ if run and raw_json.strip():
     patched = re.sub(r"\bst\.file_uploader\s*\(", "_fake_uploader(", code)
     patched = re.sub(r"st\.set_page_config\s*\(.*?\)\s*\n?", "", patched, flags=re.DOTALL)
 
+    # Патч для дат: после каждого st.date_input вставляем строку конвертации в pd.Timestamp
+    # Ищем паттерн: var1, var2 = st.date_input(...)
+    # и добавляем после него: var1, var2 = pd.Timestamp(var1), pd.Timestamp(var2)
+    date_lines = []
+    for line in patched.splitlines():
+        date_lines.append(line)
+        m = re.match(r"(\s*)(\w+)\s*,\s*(\w+)\s*=\s*st\.date_input\s*\(", line)
+        if m:
+            indent, v1, v2 = m.group(1), m.group(2), m.group(3)
+            date_lines.append(f"{indent}{v1}, {v2} = pd.Timestamp({v1}), pd.Timestamp({v2})")
+        else:
+            m2 = re.match(r"(\s*)(\w+)\s*=\s*st\.date_input\s*\(", line)
+            if m2:
+                indent, v1 = m2.group(1), m2.group(2)
+                date_lines.append(f"{indent}{v1} = pd.Timestamp({v1})")
+    patched = "\n".join(date_lines)
+
     try:
         exec(textwrap.dedent(patched), exec_ns)
     except Exception as e:
