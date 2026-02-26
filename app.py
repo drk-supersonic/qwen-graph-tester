@@ -10,7 +10,7 @@ import base64
 
 st.set_page_config(page_title="Qwen Graph Tester", layout="wide")
 
-st.title("Тестер графиков от Qwen2.5-14B-Instruct-AWQ")
+st.title("Тестер графиков от Qwen2.5-14B-Instruct-AWQ 111")
 st.markdown("Вставь весь JSON-ответ → приложение вытащит код и отрендерит все графики.")
 
 raw_json = st.text_area("Вставь весь JSON-ответ", height=400)
