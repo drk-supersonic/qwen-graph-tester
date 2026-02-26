@@ -37,12 +37,12 @@ if st.button("Обработать и показать"):
 
             # Авто-рендер всех графиков
             st.subheader("Автоматический рендер всех графиков")
-            graph_patterns = [
+            graph_found = False
+            fig_patterns = [
                 r'(fig\d*,\s*ax\d*\s*=|fig\s*=|plt\.figure).*?(st\.pyplot|plt\.show|st\.plotly_chart|fig\.show)',
                 r'sns\..*?(st\.pyplot|plt\.show)',
                 r'px\..*?st\.plotly_chart'
             ]
-            graph_found = False
             for pattern in graph_patterns:
                 matches = re.finditer(pattern, code, re.DOTALL | re.IGNORECASE)
                 for match in matches:
@@ -63,11 +63,11 @@ if st.button("Обработать и показать"):
                         plt.close(fig)
 
             if not graph_found:
-                st.warning("Не нашёл графики в коде. Попробуй ручной режим ниже.")
+                st.warning("Не нашёл графики. Используй ручной режим ниже (вставь фрагмент от fig = ... до st.pyplot или st.plotly_chart).")
 
             # Ручной режим
             st.subheader("Ручной рендер")
-            manual_code = st.text_area("Вставь только код одного графика (от fig = ... до plt.show() или st.plotly_chart)", height=200)
+            manual_code = st.text_area("Вставь только код одного графика", height=200)
             if st.button("Ручной рендер"):
                 if manual_code.strip():
                     fig = plt.figure(figsize=(12, 8))
