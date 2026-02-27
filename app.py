@@ -119,6 +119,22 @@ def patch_plotly_keys(code: str) -> str:
 
 code = patch_plotly_keys(code)
 
+# ── patch missing fig initialisations ─────────────────────────────────────
+def patch_missing_figs(code: str) -> str:
+    import re
+    lines = code.splitlines()
+    # find all figN names that are used (e.g. fig5.add_trace) but never assigned
+    used  = set(re.findall(r'\b(fig\d+)\.', code))
+    defined = set(re.findall(r'\b(fig\d+)\s*=', code))
+    missing = used - defined
+    if not missing:
+        return code
+    # prepend go.Figure() initialisations before first use of each missing fig
+    init_lines = [f"{name} = go.Figure()" for name in sorted(missing)]
+    return "\n".join(init_lines) + "\n" + code
+
+code = patch_missing_figs(code)
+
 # ── patch Period columns: convert to str so Plotly can serialize ───────────
 def patch_period_columns(code: str) -> str:
     prefix = """
