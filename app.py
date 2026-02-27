@@ -153,23 +153,29 @@ def _safe_px(fn):
         # 2. fix size= — handle column name, list, Series, or expression result
         size_val = kw.get("size")
         if size_val is not None:
-            # column name → clip that column in-place
+            # column name → check it's numeric, clip, or drop if not
             if isinstance(size_val, str) and data_frame is not None:
                 try:
-                    if _pd.api.types.is_numeric_dtype(data_frame[size_val]):
-                        data_frame[size_val] = data_frame[size_val].clip(lower=0)
+                    col = data_frame[size_val]
+                    if _pd.api.types.is_numeric_dtype(col):
+                        data_frame[size_val] = col.clip(lower=0)
+                    else:
+                        # non-numeric column passed as size — remove the arg
+                        del kw["size"]
                 except Exception:
-                    pass
+                    kw.pop("size", None)
             else:
                 # Series, array, list, or computed expression — clip to >= 0
                 try:
                     if isinstance(size_val, _pd.Series):
-                        kw["size"] = size_val.clip(lower=0)
+                        arr = _np.asarray(size_val.values, dtype=float)
+                        kw["size"] = list(_np.clip(arr, 0, None))
                     else:
                         arr = _np.asarray(size_val, dtype=float)
                         kw["size"] = list(_np.clip(arr, 0, None))
                 except Exception:
-                    pass
+                    # if conversion to float fails entirely — just drop size
+                    kw.pop("size", None)
         return fn(data_frame, *a, **kw)
     return _w
 
