@@ -134,6 +134,15 @@ def _fix_periods(d):
 
 _fix_periods(df)
 
+# patch df.corr() to always use only numeric columns
+import pandas as _pd_orig
+_orig_corr = _pd_orig.DataFrame.corr
+def _safe_corr(self, method='pearson', min_periods=1, **kw):
+    numeric_df = self.select_dtypes(include='number')
+    return _orig_corr(numeric_df, method=method, min_periods=min_periods, **kw)
+_pd_orig.DataFrame.corr = _safe_corr
+
+
 import plotly.express as _px_orig
 _px_real_bar     = _px_orig.bar
 _px_real_line    = _px_orig.line
