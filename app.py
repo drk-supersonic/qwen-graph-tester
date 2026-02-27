@@ -220,20 +220,35 @@ except Exception as e:
     st.error(f"**{type(e).__name__}**: {e}")
 
     tb = traceback.format_exc()
-    # show only lines pointing at the model's code
+
+    # show lines from model code with context
+    code_lines = code.splitlines()
     model_lines = [l for l in tb.splitlines() if "<string>" in l or type(e).__name__ in l]
     if model_lines:
         st.code("\n".join(model_lines), language="text")
-    else:
-        st.code(tb, language="text")
+
+    # extract error line number and show code context
+    import re as _re
+    line_nums = [int(m) for m in _re.findall(r'<string>, line (\d+)', tb)]
+    if line_nums:
+        err_line = line_nums[-1]
+        start = max(0, err_line - 4)
+        end = min(len(code_lines), err_line + 2)
+        snippet = []
+        for i, l in enumerate(code_lines[start:end], start=start+1):
+            marker = ">>>" if i == err_line else "   "
+            snippet.append(f"{marker} {i:3d} | {l}")
+        st.markdown("**Код вокруг ошибки:**")
+        st.code("\n".join(snippet), language="python")
 
     # ── helpful hints ──────────────────────────────────────────────────────
     if isinstance(e, KeyError):
         st.warning(f"Колонка `{e}` не найдена. Доступные колонки df:")
         st.code(str(list(df.columns)))
-
+    elif isinstance(e, ValueError) and "could not convert string to float" in str(e):
+        st.warning("Модель передала текстовую колонку туда где ожидается число. Смотри строку выше.")
     elif isinstance(e, AttributeError) and "has no attribute" in str(e):
-        st.warning("Возможно, модель обратилась к несуществующему методу или переменной.")
+        st.warning("Модель обратилась к несуществующему методу или переменной.")
 
     # always show df schema at the bottom so the user can judge the model
     with st.expander("📊 Схема demo-датафрейма", expanded=False):
