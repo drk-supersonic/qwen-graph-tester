@@ -1,6 +1,11 @@
 import streamlit as st
 import json
 import re
+import io
+import sys
+import textwrap
+import traceback
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -9,26 +14,52 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import io
-import base64
-import textwrap
 
 st.set_page_config(page_title="Qwen Graph Tester", layout="wide")
+st.title("🧪 Qwen Graph Tester")
+st.markdown("Вставь **сырой JSON-ответ** из терминала — приложение извлечёт Python-код и отрендерит графики.")
 
-st.title("Qwen Graph Tester")
-st.markdown("Вставь **весь сырой JSON-ответ** из терминала — приложение вытащит Python-код и отрендерит графики напрямую.")
+# ── sample dataframe ───────────────────────────────────────────────────────
+@st.cache_data
+def make_sample_df() -> pd.DataFrame:
+    rng = np.random.default_rng(42)
+    n = 300
+    dates = pd.date_range("2023-01-01", periods=n, freq="D")
+    return pd.DataFrame({
+        "date":          dates.astype(str),
+        "sales":         rng.integers(100, 5000, n).astype(float),
+        "region":        rng.choice(["Север", "Юг", "Запад", "Восток"], n),
+        "product":       rng.choice([f"Продукт {i}" for i in range(1, 16)], n),
+        "category":      rng.choice(["Электроника", "Одежда", "Еда", "Спорт"], n),
+        "customer_type": rng.choice(["Розница", "Оптовик", "VIP"], n),
+        "price":         rng.uniform(10, 500, n).round(2),
+        "discount":      rng.uniform(0, 0.4, n).round(2),
+        "quantity":      rng.integers(1, 50, n),
+    })
 
-# ---------- sanitize & extract (оставил как было) -------------------------
-def sanitize_code(code: str) -> str:
-    tq_d = '"' + '"' + '"'
-    tq_s = "'" + "'" + "'"
-    if code.count(tq_d) % 2 != 0:
-        idx = code.rfind(tq_d)
-        code = code[:idx].rstrip()
-    if code.count(tq_s) % 2 != 0:
-        idx = code.rfind(tq_s)
-        code = code[:idx].rstrip()
+# ── code extraction ────────────────────────────────────────────────────────
+def extract_code(raw: str) -> str | None:
+    """Pull Python code from a vLLM JSON response."""
+    try:
+        data = json.loads(raw)
+        content = data["choices"][0]["message"]["content"]
+    except Exception as e:
+        st.error(f"Не удалось распарсить JSON: {e}")
+        return None
 
+    # prefer ```python ... ``` block
+    m = re.search(r"```python\s*(.*?)```", content, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    # fallback: any fenced block
+    m = re.search(r"```\s*(.*?)```", content, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    # fallback: whole content
+    return content.strip()
+
+def fix_syntax(code: str) -> str:
+    """Try to trim trailing broken lines until the code compiles."""
     lines = code.splitlines()
     for i in range(len(lines), 0, -1):
         candidate = "\n".join(lines[:i])
@@ -39,127 +70,90 @@ def sanitize_code(code: str) -> str:
             continue
     return code
 
-def extract_code(raw_json: str):
-    try:
-        data = json.loads(raw_json)
-        content = data["choices"][0]["message"]["content"]
-    except Exception as e:
-        st.error(f"Не удалось распарсить JSON: {e}")
-        return None
-
-    match = re.search(r"```python\s*(.*?)```", content, re.DOTALL)
-    if match:
-        return sanitize_code(match.group(1).strip())
-    match = re.search(r"```\s*(.*?)```", content, re.DOTALL)
-    if match:
-        return sanitize_code(match.group(1).strip())
-    return sanitize_code(content.strip())
-
-# ---------- sample data ----------------------------------------------------
-def make_sample_df() -> pd.DataFrame:
-    rng = np.random.default_rng(42)
-    n = 300
-    dates = pd.date_range("2023-01-01", periods=n, freq="D")
-    df = pd.DataFrame({
-        "date": dates.astype(str),
-        "sales": rng.integers(100, 5000, n).astype(float),
-        "region": rng.choice(["Север", "Юг", "Запад", "Восток"], n),
-        "product": rng.choice([f"Продукт {i}" for i in range(1, 16)], n),
-        "category": rng.choice(["Электроника", "Одежда", "Еда", "Спорт"], n),
-        "customer_type": rng.choice(["Розница", "Оптовик", "VIP"], n),
-        "price": rng.uniform(10, 500, n).round(2),
-        "discount": rng.uniform(0, 0.4, n).round(2),
-        "quantity": rng.integers(1, 50, n),
-    })
-    return df
-
-def try_load_csv(uploaded_file):
-    if uploaded_file is None:
-        return None
-    try:
-        return pd.read_csv(uploaded_file)
-    except Exception as e:
-        st.warning(f"Не удалось загрузить CSV: {e}")
-        return None
-
-# ---------- sidebar --------------------------------------------------------
-with st.sidebar:
-    st.header("Настройки")
-    use_real_csv = st.checkbox("Загрузить реальный CSV вместо демо-данных", value=False)
-    csv_file = None
-    if use_real_csv:
-        csv_file = st.file_uploader("CSV файл", type=["csv"])
-
-    st.divider()
-    disable_autofix = st.checkbox("🚫 Отключить авто-фикс колонок (для тестов Qwen)", value=True)
-    st.caption("Когда включено — видишь настоящие ошибки модели, а не белый экран.")
-
-    st.divider()
-    st.caption("Демо-данные генерируются автоматически, если CSV не загружен.")
-
-# ---------- main -----------------------------------------------------------
+# ── main UI ────────────────────────────────────────────────────────────────
 raw_json = st.text_area(
-    "Вставь весь JSON-ответ модели",
-    height=300,
-    placeholder='{"choices": [{"message": {"content": "...код..."}}]}'
+    "JSON-ответ модели",
+    height=280,
+    placeholder='{"choices": [{"message": {"content": "```python\\n...код...\\n```"}}]}',
 )
 
-col_run, col_clear = st.columns([1, 5])
-run = col_run.button("Запустить", type="primary")
-if col_clear.button("Очистить"):
+col1, col2 = st.columns([1, 6])
+run    = col1.button("▶ Запустить", type="primary")
+clear  = col2.button("🗑 Очистить")
+
+if clear:
     st.rerun()
 
-if run and raw_json.strip():
-    code = extract_code(raw_json)
-    if not code:
-        st.stop()
+if not (run and raw_json.strip()):
+    st.info("Вставь JSON-ответ и нажми **Запустить**.")
+    st.stop()
 
-    with st.expander("Извлечённый код", expanded=False):
-        st.code(code, language="python")
-        try:
-            compile(code, "<string>", "exec")
-            st.success("Синтаксис Python валиден ✅")
-        except SyntaxError as se:
-            st.warning(f"После санитизации остались проблемы: {se}")
+# ── extract + show code ────────────────────────────────────────────────────
+code = extract_code(raw_json)
+if not code:
+    st.stop()
 
-    st.divider()
-    st.subheader("Результат рендера")
+code = fix_syntax(code)
 
-    real_df = try_load_csv(csv_file) if use_real_csv else None
-    sample_df = real_df if real_df is not None else make_sample_df()
-
-    exec_ns = { ... }  # (весь словарь как был — я не стал его копировать, он не менялся)
-
-    # === ВСЁ ОСТАЛЬНОЕ БЕЗ ИЗМЕНЕНИЙ ДО try: exec ===
-
-    # ... (весь твой код до try: exec(textwrap.dedent(patched), exec_ns)  оставь как есть)
-
+with st.expander("📄 Извлечённый код", expanded=False):
+    st.code(code, language="python")
     try:
-        exec(textwrap.dedent(patched), exec_ns)
-    except KeyError as e:
-        missing_col = str(e).strip("'\"")
-        st.error(f'KeyError: {e} — типичная ошибка Qwen')
+        compile(code, "<string>", "exec")
+        st.success("Синтаксис валиден ✅")
+    except SyntaxError as se:
+        st.error(f"Синтаксическая ошибка: {se}")
 
-        if disable_autofix:
-            st.info("Авто-фикс отключён. Это нормально для тестирования Qwen.")
-            found_dfs = {k:v for k,v in exec_ns.items() if isinstance(v, pd.DataFrame) and not k.startswith('_')}
-            if found_dfs:
-                st.warning('Доступные DataFrame и их колонки:')
-                for nm, fr in found_dfs.items():
-                    st.code(f'{nm}: {list(fr.columns)}', language='python')
-        else:
-            # старый автофикс (оставил на случай, если будешь тестировать с CSV)
-            # ... твой старый блок ...
-            pass
+st.divider()
+st.subheader("Результат")
 
-    except Exception as e:
-        err_type = type(e).__name__
-        st.error(f'Ошибка: {err_type}: {e}')
-        import traceback as _tb
-        tb_str = _tb.format_exc()
-        model_lines = [l for l in tb_str.splitlines() if '<string>' in l]
-        if model_lines:
-            st.code('\n'.join(model_lines), language='text')
+# ── execution namespace ────────────────────────────────────────────────────
+df = make_sample_df()
 
-else:
-    st.warning("Вставь JSON-ответ модели перед запуском.")
+exec_ns: dict = {
+    # data
+    "df": df,
+    "sample_df": df,
+    # libs
+    "pd": pd,
+    "np": np,
+    "plt": plt,
+    "sns": sns,
+    "px": px,
+    "go": go,
+    "io": io,
+    # streamlit
+    "st": st,
+}
+
+# ── run ────────────────────────────────────────────────────────────────────
+try:
+    exec(textwrap.dedent(code), exec_ns)
+
+    # render any matplotlib figures the code created but didn't show
+    for fig_obj in map(plt.figure, plt.get_fignums()):
+        st.pyplot(fig_obj)
+    plt.close("all")
+
+except Exception as e:
+    st.error(f"**{type(e).__name__}**: {e}")
+
+    tb = traceback.format_exc()
+    # show only lines pointing at the model's code
+    model_lines = [l for l in tb.splitlines() if "<string>" in l or type(e).__name__ in l]
+    if model_lines:
+        st.code("\n".join(model_lines), language="text")
+    else:
+        st.code(tb, language="text")
+
+    # ── helpful hints ──────────────────────────────────────────────────────
+    if isinstance(e, KeyError):
+        st.warning(f"Колонка `{e}` не найдена. Доступные колонки df:")
+        st.code(str(list(df.columns)))
+
+    elif isinstance(e, AttributeError) and "has no attribute" in str(e):
+        st.warning("Возможно, модель обратилась к несуществующему методу или переменной.")
+
+    # always show df schema at the bottom so the user can judge the model
+    with st.expander("📊 Схема demo-датафрейма", expanded=False):
+        st.dataframe(df.head())
+        st.text(str(df.dtypes))
