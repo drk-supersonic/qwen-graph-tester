@@ -106,6 +106,19 @@ with st.expander("📄 Извлечённый код", expanded=False):
 st.divider()
 st.subheader("Результат")
 
+# ── patch duplicate plotly_chart keys ─────────────────────────────────────
+def patch_plotly_keys(code: str) -> str:
+    counter = [0]
+    def replacer(m):
+        counter[0] += 1
+        inner = m.group(1).rstrip().rstrip(",")
+        if "key=" in inner:
+            return m.group(0)
+        return f"st.plotly_chart({inner}, key='_plotly_{counter[0]}')"
+    return re.sub(r"st\.plotly_chart\((.+?)\)", replacer, code, flags=re.DOTALL)
+
+code = patch_plotly_keys(code)
+
 # ── execution namespace ────────────────────────────────────────────────────
 df = make_sample_df()
 
