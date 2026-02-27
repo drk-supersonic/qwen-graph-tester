@@ -119,6 +119,48 @@ def patch_plotly_keys(code: str) -> str:
 
 code = patch_plotly_keys(code)
 
+# ── patch Period columns: convert to str so Plotly can serialize ───────────
+def patch_period_columns(code: str) -> str:
+    """
+    Wrap every px.* and go.* call so that any DataFrame column containing
+    pd.Period values is converted to str beforehand.
+    We inject a helper function into exec_ns and call it on the df each time
+    a plotly figure is constructed — simplest approach: monkey-patch the df.
+    """
+    # inject a pre-exec snippet that wraps DataFrame so Period cols → str
+    prefix = (
+        "def _fix_periods(d):\n"
+        "    import pandas as _pd\n"
+        "    for _c in d.select_dtypes(include='period').columns:\n"
+        "        d[_c] = d[_c].astype(str)\n"
+        "    return d\n"
+        "# auto-fix Period columns on existing df\n"
+        "_fix_periods(df)\n"
+    )
+    # also patch any local DataFrames created mid-code before px calls
+    # by wrapping groupby().agg() results — too hard to patch statically,
+    # so instead we patch px module to auto-fix its first positional arg
+    prefix += (
+        "import plotly.express as _px_orig\n"
+        "_px_real_bar   = _px_orig.bar\n"
+        "_px_real_line  = _px_orig.line\n"
+        "_px_real_box   = _px_orig.box\n"
+        "_px_real_scatter = _px_orig.scatter\n"
+        "def _safe_px(fn):\n"
+        "    def _w(data_frame=None, *a, **kw):\n"
+        "        if data_frame is not None:\n"
+        "            _fix_periods(data_frame)\n"
+        "        return fn(data_frame, *a, **kw)\n"
+        "    return _w\n"
+        "px.bar     = _safe_px(_px_real_bar)\n"
+        "px.line    = _safe_px(_px_real_line)\n"
+        "px.box     = _safe_px(_px_real_box)\n"
+        "px.scatter = _safe_px(_px_real_scatter)\n"
+    )
+    return prefix + code
+
+code = patch_period_columns(code)
+
 # ── execution namespace ────────────────────────────────────────────────────
 df = make_sample_df()
 
