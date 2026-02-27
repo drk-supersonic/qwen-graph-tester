@@ -141,12 +141,35 @@ _px_real_box     = _px_orig.box
 _px_real_scatter = _px_orig.scatter
 
 def _safe_px(fn):
+    import numpy as _np
+    import pandas as _pd
     def _w(data_frame=None, *a, **kw):
+        # 1. fix Period columns
         if data_frame is not None:
             try:
                 _fix_periods(data_frame)
             except Exception:
                 pass
+        # 2. fix size= — handle column name, list, Series, or expression result
+        size_val = kw.get("size")
+        if size_val is not None:
+            # column name → clip that column in-place
+            if isinstance(size_val, str) and data_frame is not None:
+                try:
+                    if _pd.api.types.is_numeric_dtype(data_frame[size_val]):
+                        data_frame[size_val] = data_frame[size_val].clip(lower=0)
+                except Exception:
+                    pass
+            else:
+                # Series, array, list, or computed expression — clip to >= 0
+                try:
+                    if isinstance(size_val, _pd.Series):
+                        kw["size"] = size_val.clip(lower=0)
+                    else:
+                        arr = _np.asarray(size_val, dtype=float)
+                        kw["size"] = list(_np.clip(arr, 0, None))
+                except Exception:
+                    pass
         return fn(data_frame, *a, **kw)
     return _w
 
