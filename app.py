@@ -10,7 +10,7 @@ import io
 import base64
 
 # VLLM сервер (публичный IP твоего сервера iivm)
-VLLM_URL = "https://humor-johnston-sponsorship-contributions.trycloudflare.com/v1/chat/completions"
+VLLM_URL = "https://cute-discussed-drove-attacks.trycloudflare.com/v1/chat/completions"
 
 st.set_page_config(page_title="Qwen Graph Tester", layout="wide")
 
