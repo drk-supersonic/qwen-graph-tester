@@ -10,7 +10,7 @@ import io
 import base64
 
 # VLLM сервер (публичный IP твоего сервера iivm)
-VLLM_URL = "https://rrgcov-ip-195-133-249-50.tunnelmole.net/v1/chat/completions"
+VLLM_URL = "https://jq6pxd-ip-195-133-249-50.tunnelmole.net/v1/chat/completions"
 
 st.set_page_config(page_title="Qwen Graph Tester", layout="wide")
 
